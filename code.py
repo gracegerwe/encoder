@@ -1,8 +1,10 @@
 import numpy as np
 import scipy.signal as signal
 import matplotlib.pyplot as plt
-from skimage import io, color, transform
 from scipy.ndimage import gaussian_filter
+import requests
+from io import BytesIO
+from PIL import Image
 
 class VisualCortexEncoder:
     def __init__(self, v1_neurons=1000, v4_neurons=500):
@@ -89,13 +91,21 @@ class VisualCortexEncoder:
         Returns:
         Dictionary containing simulated V1 and V4 neural responses
         """
+        # Convert PIL Image to numpy array if needed
+        if hasattr(image, 'convert'):
+            image = np.array(image)
+            
         # Resize and convert to grayscale if needed
         if len(image.shape) == 3 and image.shape[2] > 1:
-            gray_image = color.rgb2gray(image)
+            # Simple grayscale conversion
+            gray_image = np.mean(image, axis=2)
         else:
             gray_image = image
             
-        resized_image = transform.resize(gray_image, (128, 128))
+        # Resize to 128x128
+        h, w = gray_image.shape
+        resized_image = np.array(Image.fromarray(gray_image.astype(np.uint8)).resize((128, 128)))
+        resized_image = resized_image / 255.0  # Normalize to [0,1]
         
         # Create Gabor filters to simulate V1 responses
         gabor_filters = self.create_gabor_filters(image_size=25)
@@ -106,7 +116,7 @@ class VisualCortexEncoder:
             # Create a mask for where this V1 neuron's receptive field is located
             x_center = int(self.v1_positions_x[i] * resized_image.shape[1])
             y_center = int(self.v1_positions_y[i] * resized_image.shape[0])
-            rf_size = int(np.exp(self.v1_receptive_sizes[i]) * 20) # Convert log size to pixels
+            rf_size = int(np.exp(self.v1_receptive_sizes[i]) * 20)  # Convert log size to pixels
             
             # Extract patch (with boundary handling)
             x_min = max(0, x_center - rf_size)
@@ -130,16 +140,22 @@ class VisualCortexEncoder:
             
             # Resize filter to match patch if needed
             gabor = gabor_filters[filter_index]
-            if gabor.shape[0] > patch.shape[0] or gabor.shape[1] > patch.shape[1]:
-                gabor = transform.resize(gabor, (
-                    min(gabor.shape[0], patch.shape[0]),
-                    min(gabor.shape[1], patch.shape[1])
-                ))
+            gabor_h, gabor_w = gabor.shape
+            patch_h, patch_w = patch.shape
+            
+            if gabor_h > patch_h or gabor_w > patch_w:
+                # Resize gabor to fit within patch
+                new_h = min(gabor_h, patch_h)
+                new_w = min(gabor_w, patch_w)
+                gabor = np.array(Image.fromarray(gabor).resize((new_w, new_h)))
             
             # Convolve patch with Gabor filter and get maximum response
             if gabor.shape[0] <= patch.shape[0] and gabor.shape[1] <= patch.shape[1]:
-                response = signal.convolve2d(patch, gabor, mode='valid')
-                v1_responses[i] = np.max(np.abs(response))
+                try:
+                    response = signal.convolve2d(patch, gabor, mode='valid')
+                    v1_responses[i] = np.max(np.abs(response))
+                except ValueError:
+                    continue  # Skip if convolution fails
         
         # Apply nonlinearity to V1 responses (rectification and saturation)
         v1_responses = np.maximum(0, v1_responses)  # ReLU-like
@@ -170,67 +186,35 @@ class VisualCortexEncoder:
             'v4_responses': v4_responses
         }
     
-    def generate_training_dataset(self, image_paths, save_path=None):
-        """
-        Generate a dataset of simulated neural responses to images
-        
-        Parameters:
-        image_paths: List of paths to input images
-        save_path: Optional path to save the dataset
-        
-        Returns:
-        Dictionary containing stimuli and corresponding neural responses
-        """
-        dataset = {
-            'images': [],
-            'v1_responses': [],
-            'v4_responses': []
-        }
-        
-        for img_path in image_paths:
-            try:
-                img = io.imread(img_path)
-                neural_responses = self.process_image(img)
-                
-                # Store results
-                dataset['images'].append(img_path)
-                dataset['v1_responses'].append(neural_responses['v1_responses'])
-                dataset['v4_responses'].append(neural_responses['v4_responses'])
-                
-                print(f"Processed {img_path}")
-            except Exception as e:
-                print(f"Error processing {img_path}: {e}")
-        
-        # Convert to numpy arrays
-        dataset['v1_responses'] = np.array(dataset['v1_responses'])
-        dataset['v4_responses'] = np.array(dataset['v4_responses'])
-        
-        # Save dataset if requested
-        if save_path:
-            np.save(save_path, dataset)
-            print(f"Dataset saved to {save_path}")
-        
-        return dataset
-    
     def visualize_responses(self, image, figsize=(15, 10)):
         """Visualize V1 and V4 responses to an input image"""
-        responses = self.process_image(image)
+        # Convert PIL Image to numpy array if needed
+        if hasattr(image, 'convert'):
+            image_array = np.array(image)
+        else:
+            image_array = image
+            
+        responses = self.process_image(image_array)
         
         plt.figure(figsize=figsize)
         
         # Show input image
         plt.subplot(2, 2, 1)
-        plt.imshow(image, cmap='gray')
+        if len(image_array.shape) == 3:
+            plt.imshow(image_array)
+        else:
+            plt.imshow(image_array, cmap='gray')
         plt.title('Input Image')
         plt.axis('off')
         
         # Show V1 responses map (2D arrangement)
         v1_2d = np.zeros((40, 40))
-        for i in range(self.v1_neurons):
-            if i < 1600:  # Only plot a subset if there are too many neurons
-                x = int(self.v1_positions_x[i] * 40)
-                y = int(self.v1_positions_y[i] * 40)
-                v1_2d[y, x] = max(v1_2d[y, x], responses['v1_responses'][i])
+        for i in range(min(1600, self.v1_neurons)):  # Only plot a subset if there are too many neurons
+            x = int(self.v1_positions_x[i] * 40)
+            y = int(self.v1_positions_y[i] * 40)
+            x = min(39, max(0, x))  # Ensure within bounds
+            y = min(39, max(0, y))  # Ensure within bounds
+            v1_2d[y, x] = max(v1_2d[y, x], responses['v1_responses'][i])
         
         plt.subplot(2, 2, 2)
         plt.imshow(gaussian_filter(v1_2d, sigma=1), cmap='viridis')
@@ -239,107 +223,108 @@ class VisualCortexEncoder:
         
         # Show V4 neuron responses as a bar plot (top responding neurons)
         plt.subplot(2, 1, 2)
-        top_v4_indices = np.argsort(responses['v4_responses'])[-20:]
+        num_to_show = min(20, self.v4_neurons)
+        top_v4_indices = np.argsort(responses['v4_responses'])[-num_to_show:]
         plt.bar(range(len(top_v4_indices)), 
                 responses['v4_responses'][top_v4_indices],
                 tick_label=[f"V4_{i}" for i in top_v4_indices])
-        plt.title('Top 20 V4 Neuron Responses')
+        plt.title(f'Top {num_to_show} V4 Neuron Responses')
         plt.ylabel('Activation')
         plt.xticks(rotation=45)
         
         plt.tight_layout()
-        plt.show()
-
-# Example of training a basic decoder model using the simulated responses
-def train_decoder_model(encoder, image_paths, epochs=100):
-    """
-    Train a simple decoder model that attempts to reconstruct visual features
-    from simulated neural activity
-    """
-    from sklearn.model_selection import train_test_split
-    from tensorflow.keras.models import Sequential
-    from tensorflow.keras.layers import Dense, Dropout
-    from tensorflow.keras.optimizers import Adam
-    
-    # Generate dataset of neural responses
-    dataset = encoder.generate_training_dataset(image_paths)
-    
-    # Extract features from images (e.g., using a pre-trained CNN)
-    import tensorflow as tf
-    feature_extractor = tf.keras.applications.VGG16(
-        include_top=False, 
-        weights='imagenet',
-        input_shape=(224, 224, 3),
-        pooling='avg'
-    )
-    
-    # Extract features
-    image_features = []
-    for img_path in dataset['images']:
-        img = io.imread(img_path)
-        img = transform.resize(img, (224, 224))
-        if len(img.shape) == 2:  # If grayscale
-            img = np.stack([img, img, img], axis=-1)
-        elif img.shape[2] == 4:  # If RGBA
-            img = img[:,:,:3]
         
-        # Ensure values are in [0, 255]
-        if img.max() <= 1.0:
-            img = img * 255
+        # For visual comparison: Visualize some Gabor filters
+        plt.figure(figsize=(10, 3))
+        plt.suptitle("Sample Gabor Filters (V1 Simple Cells)")
+        gabor_filters = self.create_gabor_filters(image_size=25)
+        
+        for i in range(8):  # Show 8 orientations at one scale
+            plt.subplot(1, 8, i+1)
+            plt.imshow(gabor_filters[i], cmap='gray')
+            plt.axis('off')
+            plt.title(f"{(i*22.5):.0f}°")
             
-        img = tf.keras.applications.vgg16.preprocess_input(img)
-        features = feature_extractor.predict(np.expand_dims(img, axis=0))
-        image_features.append(features.flatten())
-    
-    image_features = np.array(image_features)
-    
-    # Combine V1 and V4 responses as input features
-    neural_features = np.concatenate(
-        [dataset['v1_responses'], dataset['v4_responses']], axis=1)
-    
-    # Split into train/test sets
-    X_train, X_test, y_train, y_test = train_test_split(
-        neural_features, image_features, test_size=0.2)
-    
-    # Build a simple decoder model
-    decoder = Sequential([
-        Dense(1024, activation='relu', input_shape=(X_train.shape[1],)),
-        Dropout(0.3),
-        Dense(1024, activation='relu'),
-        Dropout(0.3),
-        Dense(y_train.shape[1], activation='linear')
-    ])
-    
-    decoder.compile(optimizer=Adam(1e-4), loss='mse')
-    
-    # Train the model
-    history = decoder.fit(
-        X_train, y_train,
-        validation_data=(X_test, y_test),
-        epochs=epochs,
-        batch_size=32
-    )
-    
-    return decoder, history
+        plt.tight_layout()
+            
+        # Also visualize V4 connectivity
+        plt.figure(figsize=(10, 4))
+        plt.subplot(1, 2, 1)
+        v4_example = self.v1_v4_weights[0, :]  # First V4 neuron's connections
+        v4_2d = np.zeros((40, 40))
+        for i in range(min(1600, self.v1_neurons)):
+            x = int(self.v1_positions_x[i] * 40)
+            y = int(self.v1_positions_y[i] * 40)
+            x = min(39, max(0, x))  # Ensure within bounds
+            y = min(39, max(0, y))  # Ensure within bounds
+            v4_2d[y, x] = max(v4_2d[y, x], abs(v4_example[i]))
+        
+        plt.imshow(gaussian_filter(v4_2d, sigma=1), cmap='plasma')
+        plt.title('Example V4 Neuron Connectivity')
+        plt.colorbar()
+        
+        plt.subplot(1, 2, 2)
+        # Show orientation tuning of this V4 neuron
+        orientation_bins = np.linspace(0, np.pi, 16)
+        orientation_weights = np.zeros(len(orientation_bins)-1)
+        
+        for i in range(self.v1_neurons):
+            bin_idx = np.digitize(self.v1_orientations[i], orientation_bins) - 1
+            if 0 <= bin_idx < len(orientation_weights):
+                orientation_weights[bin_idx] += abs(v4_example[i])
+                
+        bin_centers = (orientation_bins[:-1] + orientation_bins[1:]) / 2
+        bin_degrees = bin_centers * 180 / np.pi
+        
+        plt.bar(bin_degrees, orientation_weights / np.sum(orientation_weights), width=180/16)
+        plt.title('V4 Neuron Orientation Preference')
+        plt.xlabel('Orientation (degrees)')
+        plt.ylabel('Normalized Weight')
+        
+        plt.tight_layout()
+        plt.show()
+        
+        return responses
 
-# Usage example
-def example_usage():
-    # Create the encoder
-    encoder = VisualCortexEncoder(v1_neurons=2000, v4_neurons=500)
+# Function to download and process a test image
+def download_test_image(url=None):
+    if url is None:
+        # Default image: Lena test image
+        url = "https://upload.wikimedia.org/wikipedia/en/7/7d/Lenna_%28test_image%29.png"
+        
+    try:
+        response = requests.get(url)
+        img = Image.open(BytesIO(response.content))
+        return img
+    except Exception as e:
+        print(f"Error downloading image: {e}")
+        # Create a simple test pattern instead
+        img = Image.new('RGB', (256, 256), color='white')
+        return img
+
+# Main execution - just run this script directly
+if __name__ == "__main__":
+    print("Downloading test image...")
     
-    # Process a sample image
-    sample_image = io.imread('sample_image.jpg')
-    responses = encoder.process_image(sample_image)
+    # Try different test images for different visual features
+    image_urls = [
+        "https://upload.wikimedia.org/wikipedia/en/7/7d/Lenna_%28test_image%29.png",  # Lena - standard test image
+        "https://images.pexels.com/photos/414612/pexels-photo-414612.jpeg",  # Landscape with clear edges
+        "https://images.pexels.com/photos/1170986/pexels-photo-1170986.jpeg"  # Face with varied features
+    ]
     
-    # Visualize the responses
-    encoder.visualize_responses(sample_image)
+    print("Creating visual cortex encoder...")
+    # Use smaller neuron counts for faster execution
+    encoder = VisualCortexEncoder(v1_neurons=500, v4_neurons=100)
     
-    # Generate a training dataset
-    image_paths = ['image1.jpg', 'image2.jpg', 'image3.jpg', ...]  # List of image paths
-    dataset = encoder.generate_training_dataset(image_paths, save_path='neural_responses.npy')
+    for i, url in enumerate(image_urls):
+        try:
+            print(f"\nProcessing test image {i+1}...")
+            test_image = download_test_image(url)
+            print("Visualizing neural responses...")
+            encoder.visualize_responses(test_image)
+            print(f"Visualization complete for image {i+1}!")
+        except Exception as e:
+            print(f"Error processing image {i+1}: {e}")
     
-    # Train a decoder model
-    decoder_model, training_history = train_decoder_model(encoder, image_paths, epochs=50)
-    
-    # Save the trained decoder model
-    decoder_model.save('visual_decoder_model.h5')
+    print("\nAll done! You should see several figures with visualizations.")
