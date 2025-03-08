@@ -8,7 +8,7 @@ duration = 500*ms  # Total simulation time
 bin_size = 15*ms  # Binning interval
 
 # Input current (step current)
-I_ext = 25 * nA  # Decreased from 200 nA back to 50 nA
+I_ext = 20 * nA  # Decreased from 200 nA back to 50 nA
 
 # ------------------- LIF Model -------------------
 eqs_LIF = '''
