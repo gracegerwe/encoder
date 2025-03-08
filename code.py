@@ -179,13 +179,13 @@ class VisualCortexEncoder:
         else:
             ax.imshow(image_array, cmap='gray')
 
-        # Show V1 responses as a 2D map
+        # Shows actual neural responses to the current image
         v1_2d = np.zeros((40, 40))
-        for i in range(min(1600, self.v1_neurons)):  # Only plot a subset if there are too many neurons
+        for i in range(min(1600, self.v1_neurons)):
             x = int(self.v1_positions_x[i] * 40)
             y = int(self.v1_positions_y[i] * 40)
-            x = min(39, max(0, x))  # Ensure within bounds
-            y = min(39, max(0, y))  # Ensure within bounds
+            x = min(39, max(0, x))
+            y = min(39, max(0, y))
             v1_2d[y, x] = max(v1_2d[y, x], responses['v1_responses'][i])
 
         ax = axes[1]
@@ -193,19 +193,20 @@ class VisualCortexEncoder:
         ax.set_title("V1 Responses")
         fig.colorbar(img, ax=ax, fraction=0.046, pad=0.04)
 
-        # Show V4 connectivity
+        # Show V4 responses as a 2D map
         ax = axes[2]
-        v4_example = self.v1_to_v4[0, :]  # First V4 neuron's connections
         v4_2d = np.zeros((40, 40))
         for i in range(min(1600, self.v1_neurons)):
             x = int(self.v1_positions_x[i] * 40)
             y = int(self.v1_positions_y[i] * 40)
-            x = min(39, max(0, x))  # Ensure within bounds
-            y = min(39, max(0, y))  # Ensure within bounds
-            v4_2d[y, x] = max(v4_2d[y, x], abs(v4_example[i]))
+            x = min(39, max(0, x))
+            y = min(39, max(0, y))
+            # Use actual V4 responses instead of connectivity weights
+            v4_response = responses['v4_responses']
+            v4_2d[y, x] = max(v4_2d[y, x], np.mean(v4_response))
 
         img = ax.imshow(gaussian_filter(v4_2d, sigma=1), cmap='plasma')
-        ax.set_title("Example V4 Neuron Connectivity")
+        ax.set_title("V4 Responses")  # Updated title
         fig.colorbar(img, ax=ax, fraction=0.046, pad=0.04)
 
         plt.tight_layout()
