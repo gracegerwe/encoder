@@ -8,7 +8,7 @@ duration = 500*ms  # Total simulation time
 bin_size = 15*ms  # Binning interval
 
 # Input current (step current)
-I_ext = 5 * nA  # External current in nanoamps
+I_ext = 200 * nA  # Increased from 5 nA to 200 nA to ensure spiking
 
 # ------------------- LIF Model -------------------
 eqs_LIF = '''
@@ -25,6 +25,9 @@ neuron_LIF.v = -65*mV
 neuron_LIF.I = I_ext
 
 spikemon_LIF = SpikeMonitor(neuron_LIF)
+
+# Add state monitors to record voltage traces
+statemon_LIF = StateMonitor(neuron_LIF, 'v', record=True)
 
 # ------------------- Izhikevich Model -------------------
 eqs_IZH = '''
@@ -48,6 +51,9 @@ neuron_IZH.d = 8
 neuron_IZH.I = 15
 
 spikemon_IZH = SpikeMonitor(neuron_IZH)
+
+# Add state monitors to record voltage traces
+statemon_IZH = StateMonitor(neuron_IZH, 'v', record=True)
 
 # ------------------- Run Simulation -------------------
 run(duration)
@@ -81,9 +87,8 @@ axes[1].set_ylabel("Spike Count")
 axes[1].legend()
 
 # Voltage Traces
-plot_neuron = 0  # Only one neuron per model
-axes[2].plot(neuron_LIF.v / mV, label="LIF", color='g')
-axes[2].plot(neuron_IZH.v, label="Izhikevich", color='r')
+axes[2].plot(statemon_LIF.t/ms, statemon_LIF.v[0]/mV, label="LIF", color='g')
+axes[2].plot(statemon_IZH.t/ms, statemon_IZH.v[0], label="Izhikevich", color='r')
 axes[2].set_title("Voltage Traces")
 axes[2].set_xlabel("Time (ms)")
 axes[2].set_ylabel("Membrane Potential (mV)")
