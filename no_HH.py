@@ -8,7 +8,7 @@ duration = 500*ms  # Total simulation time
 bin_size = 15*ms  # Binning interval
 
 # Input current (step current)
-I_ext = 200 * nA  # Increased from 5 nA to 200 nA to ensure spiking
+I_ext = 50 * nA  # Decreased from 200 nA back to 50 nA
 
 # ------------------- LIF Model -------------------
 eqs_LIF = '''
@@ -20,7 +20,7 @@ EL = -65*mV : volt
 '''
 
 neuron_LIF = NeuronGroup(1, eqs_LIF, method='euler',
-                         threshold='v > -50*mV', reset='v = EL')
+                         threshold='v > -50*mV', reset='v = EL', refractory=2*ms)  # Added refractory period
 neuron_LIF.v = -65*mV
 neuron_LIF.I = I_ext
 
